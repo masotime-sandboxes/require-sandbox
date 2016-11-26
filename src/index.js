@@ -1,35 +1,27 @@
 var Module = require('module');
 var chokidar = require('chokidar');
 var original_load = Module._load;
-var watchTree = {};
+var watchers = {}; // a list of watcher objects
 
-function initWatcher() {
-	var watcher = chokidar.watch();
+function initWatcher(root, watchTree) {
+	var watcher = chokidar.watch(root);
 
 	watcher.on('change', path => {
 		if (watchTree[path]) {
-			console.log(`A change was detected on a related file ${path}`);
+			console.log(`[${root}] A change was detected on dependency ${path}`);
 
-			// aggregate all files with the same root
-			var commonRoot = watchTree[path].root;
-			var filesToClear = [];
+			// clear the entire tree, including the root itself
 			Object.keys(watchTree).forEach(file => {
-				if (watchTree[file].root === commonRoot) {
-					filesToClear.push(file);
-				}
-			});
-
-			// delete all the files in the cache. this will also delete the root
-			filesToClear.forEach(file => {
-				console.log(`Reseting ${file}`);
+				console.log(`[${root}] Resetting ${file}`);
 				delete watchTree[file];
 				delete require.cache[file];
+				watcher.unwatch(file);
 			});
 
-			// remove this watcher and rewatch the root
-			console.log(`Rewatching ${commonRoot}`);
-			watcher.close();
-			watch(commonRoot);
+			// rewatch the root
+			console.log(`[${root}] Rewatching ${root}`);
+			watchTree[root] = [];
+			watcher.add(root);
 		}
 	});
 
@@ -41,28 +33,44 @@ function initWatcher() {
 }
 
 function watch(path) {
-	// if the path is not already in the tree
-	if (!watchTree[path]) {
-		watchTree[path] = [];
-		watchTree[path].root = path;
-		watchTree[path].watcher = initWatcher();
-	}
-	
-	return require(path);
+	if (watchers[path]) return;
+
+	// intiialze a watchTree with the current path
+	var watchTree = {};
+	watchTree[path] = [];
+
+	// track this particular tree
+	watchers[path] = {
+		watchTree: watchTree,
+		root: path,
+		watcher: initWatcher(path, watchTree)
+	};
 }
 
 Module._load = function shim_load(request, parent, isMain) {
 	var requirePath = Module._resolveFilename(request, parent);
-	var parentDeps = parent && parent.filename && watchTree[parent.filename];
-	if (parentDeps && parentDeps.indexOf(requirePath) < 0) {
-		// we need to track this file
-		parentDeps.push(requirePath);
+	var parentPath = parent && parent.filename;
 
-		// we also enable tracking of dependencies of this file
-		watchTree[requirePath] = [];
-		watchTree[requirePath].root = parentDeps.root;
-		parentDeps.watcher.add(requirePath);
+	if (parentPath) {
+		// we must check with the watchTree of all watchers. If any of the watchTrees
+		// has this parentPath, then we must push this dependency into that watchTree
+		var watchPaths = Object.keys(watchers);
+		watchPaths.forEach(function (watchPath) {
+			var watcher = watchers[watchPath];
+			var parentDeps = watcher.watchTree[parentPath];
 
+			// if the parent is part of the tree, and the child hasn't
+			// been added yet
+			if (parentDeps && parentDeps.indexOf(requirePath) < 0) {
+				// we need to track this file
+				parentDeps.push(requirePath);
+				watcher.watcher.add(requirePath);
+
+				// the file also becomes a potential parent of more children
+				// to watch
+				watcher.watchTree[requirePath] = [];
+			}
+		});
 	}
 
 	return original_load(request, parent, isMain);
@@ -80,12 +88,10 @@ require(__dirname + '/main/test');
 */
 
 watch(require.resolve('main/test'));
-// watch(require.resolve('main/unrelated'));
+watch(require.resolve('main/unrelated'));
 
 // mimic a continuous request on some modules
 setInterval(() => {
 	require('main/test');
 	require('main/unrelated');
 }, 1000);
-
-console.log(JSON.stringify(watchTree, null, 4));
