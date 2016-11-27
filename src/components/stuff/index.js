@@ -1,1 +1,1 @@
-module.exports = 'I like cheese';
+module.exports = 'I like cheese 🧀!!';

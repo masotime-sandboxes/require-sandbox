@@ -1,1 +1,1 @@
-export default () => 'right dependency';
+export default () => 'right dependency!!';

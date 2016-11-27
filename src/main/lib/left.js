@@ -1,1 +1,1 @@
-export default () => 'left dependency POKED';
+export default () => `left dependency!`;
